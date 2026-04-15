@@ -1,0 +1,8 @@
+# Copy this file to local.properties and fill in your values.
+# local.properties is gitignored and must NOT be committed.
+
+sdk.dir=/path/to/your/Android/Sdk
+
+# Kafka REST Proxy configuration
+REST_PROXY_URL=http://<host>:8082/
+TOPIC=events
