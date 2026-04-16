@@ -51,6 +51,21 @@ android {
 
 }
 
+afterEvaluate {
+    tasks.named("installDebug") {
+        finalizedBy("runDebugApp")
+    }
+}
+
+tasks.register<Exec>("runDebugApp") {
+    commandLine(
+        "adb", "shell", "am", "start",
+        "-n", "com.example.eventgenerator/.MainActivity",
+        "-a", "android.intent.action.MAIN",
+        "-c", "android.intent.category.LAUNCHER"
+    )
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -66,6 +81,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

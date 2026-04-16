@@ -8,7 +8,6 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.POST
 import retrofit2.http.Path
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 // REST_PROXY_URL and TOPIC are injected from local.properties via BuildConfig
@@ -16,14 +15,7 @@ private val REST_PROXY_URL = BuildConfig.REST_PROXY_URL
 private val TOPIC          = BuildConfig.TOPIC
 
 // Confluent REST Proxy request/response shapes
-data class KafkaEvent(
-    val eventId:   String = UUID.randomUUID().toString(),
-    val eventType: String,
-    val timestamp: Long   = System.currentTimeMillis(),
-    val source:    String = "android_app"
-)
-
-private data class ProduceRecord(val key: String, val value: KafkaEvent)
+private data class ProduceRecord(val key: String, val value: BaseEvent)
 private data class ProduceRequest(val records: List<ProduceRecord>)
 private data class OffsetResult(val partition: Int, val offset: Long, val error: String?)
 private data class ProduceResponse(val offsets: List<OffsetResult>)
@@ -60,7 +52,7 @@ private val retrofit = Retrofit.Builder()
 private val proxy = retrofit.create(KafkaRestProxy::class.java)
 
 object KafkaEventSender {
-    suspend fun send(event: KafkaEvent): String = withContext(Dispatchers.IO) {
+    suspend fun send(event: BaseEvent): String = withContext(Dispatchers.IO) {
         val request  = ProduceRequest(records = listOf(ProduceRecord(key = event.eventId, value = event)))
         val response = proxy.produce(TOPIC, request)
         val first    = response.offsets.first()
