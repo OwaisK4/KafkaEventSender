@@ -2,8 +2,9 @@ package com.example.eventgenerator
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.location.Location
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
@@ -37,8 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.eventgenerator.ui.theme.EventGeneratorTheme
-import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.UUID
@@ -54,21 +55,56 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             EventGeneratorTheme {
-                var status  by remember { mutableStateOf("Press a button to send a Kafka event.") }
-                var loading by remember { mutableStateOf(false) }
+                var status     by remember { mutableStateOf("Press a button to send a Kafka event.") }
+                var loading    by remember { mutableStateOf(false) }
+                var isTracking by remember { mutableStateOf(false) }
 
-                // Permission launcher: on grant, immediately send the location event
+                // Step 2: after fine location is granted, request background location
+                val backgroundLocationLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted ->
+                    if (granted) {
+                        isTracking = true
+                        startLocationService()
+                        status = "Location tracking started"
+                    } else {
+                        status = "Background location denied — tracking only works while app is open"
+                        // Start anyway; it will work in foreground without ACCESS_BACKGROUND_LOCATION
+                        isTracking = true
+                        startLocationService()
+                    }
+                }
+
+                // Step 1: request fine location, then chain to background
+                val fineLocationLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted ->
+                    if (!granted) {
+                        status = "Location permission denied"
+                        return@rememberLauncherForActivityResult
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                        ContextCompat.checkSelfPermission(
+                            this@MainActivity, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        status = "Grant 'Allow all the time' in the next prompt for background tracking"
+                        backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    } else {
+                        isTracking = true
+                        startLocationService()
+                        status = "Location tracking started"
+                    }
+                }
+
+                // Permission launcher for one-shot location event button
                 val locationPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
                 ) { granted ->
                     if (granted) {
                         loading = true
                         lifecycleScope.launch {
-                            status = try {
-                                fetchAndSendLocation()
-                            } catch (e: Exception) {
-                                "Error: ${e.message}"
-                            }
+                            status = try { fetchAndSendLocation() } catch (e: Exception) { "Error: ${e.message}" }
                             loading = false
                         }
                     } else {
@@ -88,6 +124,39 @@ class MainActivity : ComponentActivity() {
                         Text(text = status, style = MaterialTheme.typography.bodyLarge)
                         Spacer(modifier = Modifier.height(24.dp))
 
+                        // ── Auto-tracking toggle ─────────────────────────────
+                        Button(onClick = {
+                            if (isTracking) {
+                                isTracking = false
+                                stopLocationService()
+                                status = "Location tracking stopped"
+                            } else {
+                                when {
+                                    ContextCompat.checkSelfPermission(
+                                        this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION
+                                    ) != PackageManager.PERMISSION_GRANTED -> {
+                                        fineLocationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                    }
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                                    ContextCompat.checkSelfPermission(
+                                        this@MainActivity, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                                    ) != PackageManager.PERMISSION_GRANTED -> {
+                                        status = "Grant 'Allow all the time' for background tracking"
+                                        backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    }
+                                    else -> {
+                                        isTracking = true
+                                        startLocationService()
+                                        status = "Location tracking started"
+                                    }
+                                }
+                            }
+                        }) {
+                            Text(if (isTracking) "Stop Auto Tracking" else "Start Auto Tracking (5 s)")
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         // ── Button: button_pressed event ────────────────────
                         Button(
                             onClick = {
@@ -97,9 +166,7 @@ class MainActivity : ComponentActivity() {
                                         KafkaEventSender.send(
                                             buildBaseEvent("button_pressed", emptyMap<String, Any>())
                                         )
-                                    } catch (e: Exception) {
-                                        "Error: ${e.message}"
-                                    }
+                                    } catch (e: Exception) { "Error: ${e.message}" }
                                     loading = false
                                 }
                             },
@@ -118,27 +185,20 @@ class MainActivity : ComponentActivity() {
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // ── Button: location event ───────────────────────────
+                        // ── Button: one-shot location event ──────────────────
                         Button(
                             onClick = {
                                 if (ContextCompat.checkSelfPermission(
-                                        this@MainActivity,
-                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                        this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION
                                     ) == PackageManager.PERMISSION_GRANTED
                                 ) {
                                     loading = true
                                     lifecycleScope.launch {
-                                        status = try {
-                                            fetchAndSendLocation()
-                                        } catch (e: Exception) {
-                                            "Error: ${e.message}"
-                                        }
+                                        status = try { fetchAndSendLocation() } catch (e: Exception) { "Error: ${e.message}" }
                                         loading = false
                                     }
                                 } else {
-                                    locationPermissionLauncher.launch(
-                                        Manifest.permission.ACCESS_FINE_LOCATION
-                                    )
+                                    locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                                 }
                             },
                             enabled = !loading
@@ -151,6 +211,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun startLocationService() {
+        ContextCompat.startForegroundService(this, Intent(this, LocationForegroundService::class.java))
+    }
+
+    private fun stopLocationService() {
+        stopService(Intent(this, LocationForegroundService::class.java))
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun getDeviceInfo() = DeviceInfo(
@@ -161,16 +229,15 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun getContextInfo(): ContextInfo {
-        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val cm   = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
         val network = when {
             caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)     == true -> "wifi"
             caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"
             else -> "unknown"
         }
-        val bm      = getSystemService(BATTERY_SERVICE) as BatteryManager
-        val battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        return ContextInfo(network = network, battery = battery)
+        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+        return ContextInfo(network = network, battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
     }
 
     private fun buildBaseEvent(eventType: String, payload: Any) = BaseEvent(
